@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 def get_driver():
     options = Options()
-    # options.add_argument("--headless")  # activar cuando todo funcione
+    options.add_argument("--headless")  # activar cuando todo funcione
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-blink-features=AutomationControlled")
@@ -192,49 +192,45 @@ def parse_card(card, district):
     return record
 
 
-def scrape_district(district, max_pages=10):
+def scrape_district(driver, district, max_pages=10):
     logger.info(f"Iniciando scraping de distrito: {district}")
-    driver = get_driver()
     all_records = []
     seen_ids = set()
 
-    try:
-        for page in range(1, max_pages + 1):
-            url = BASE_URL.format(district=district) + f"?page={page}"
-            logger.info(f"Scraping listado: {url}")
-            soup = get_page(driver, url)
+    for page in range(1, max_pages + 1):
+        url = BASE_URL.format(district=district) + f"?page={page}"
+        logger.info(f"Scraping listado: {url}")
+        soup = get_page(driver, url)
 
-            if not soup:
-                break
+        if not soup:
+            logger.info(f"Sin respuesta en página {page} de {district}. Fin.")
+            break
 
-            cards = soup.find_all(
-                "div", attrs={"data-posting-type": True}
-            )
+        cards = soup.find_all("div", attrs={"data-posting-type": True})
 
-            if not cards:
-                logger.info(f"Sin tarjetas en página {page}. Fin.")
-                break
+        if not cards:
+            logger.info(f"Sin tarjetas en página {page} de {district}. Fin.")
+            break
 
-            new_cards = 0
-            for card in cards:
-                if is_project(card):
-                    continue
+        new_cards = 0
+        for card in cards:
+            if is_project(card):
+                continue
+            listing_id = card.get("data-id")
+            if listing_id in seen_ids:
+                continue
+            seen_ids.add(listing_id)
+            record = parse_card(card, district)
+            all_records.append(record)
+            new_cards += 1
+            logger.info(f"Extraído ID: {listing_id}")
 
-                listing_id = card.get("data-id")
-                if listing_id in seen_ids:
-                    continue
-                seen_ids.add(listing_id)
+        logger.info(f"Página {page}: {new_cards} propiedades nuevas")
 
-                record = parse_card(card, district)
-                all_records.append(record)
-                new_cards += 1
-                logger.info(f"Extraído ID: {listing_id}")
-
-            logger.info(f"Página {page}: {new_cards} propiedades nuevas")
-            time.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
-
-    finally:
-        driver.quit()
+        if page < max_pages:
+            pause = random.uniform(8, 15)
+            logger.info(f"Esperando {pause:.1f}s antes de siguiente página...")
+            time.sleep(pause)
 
     logger.info(f"Distrito {district}: {len(all_records)} propiedades extraídas")
     return all_records
@@ -244,27 +240,42 @@ def scrape_all():
     all_data = []
     os.makedirs(RAW_DATA_PATH, exist_ok=True)
 
-    for district in DISTRICTS:
-        records = scrape_district(district)
-        all_data.extend(records)
+    driver = get_driver()
 
-        if records:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            df_district = pd.DataFrame(records)
-            csv_path = os.path.join(
-                RAW_DATA_PATH, f"{district}_{timestamp}.csv"
-            )
-            df_district.to_csv(csv_path, index=False, encoding="utf-8-sig")
-            logger.info(f"Guardado: {csv_path}")
+    try:
+        # Visitar home primero para establecer sesión
+        logger.info("Iniciando sesión en Urbania...")
+        driver.get("https://urbania.pe")
+        time.sleep(random.uniform(4, 7))
 
-        time.sleep(random.uniform(5, 10))
+        for i, district in enumerate(DISTRICTS):
+            records = scrape_district(driver, district)
+            all_data.extend(records)
+
+            if records:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                df_district = pd.DataFrame(records)
+                csv_path = os.path.join(
+                    RAW_DATA_PATH, f"{district}_{timestamp}.csv"
+                )
+                df_district.to_csv(csv_path, index=False, encoding="utf-8-sig")
+                logger.info(f"Guardado: {csv_path}")
+
+            # Entre distritos: volver a home y pausa larga
+            if i < len(DISTRICTS) - 1:
+                pause = random.uniform(15, 25)
+                logger.info(f"Pausa entre distritos: {pause:.1f}s")
+                driver.get("https://urbania.pe")
+                time.sleep(pause)
+
+    finally:
+        driver.quit()
 
     df_final = pd.DataFrame(all_data)
     final_path = os.path.join(RAW_DATA_PATH, "lima_properties_raw.csv")
     df_final.to_csv(final_path, index=False, encoding="utf-8-sig")
     logger.info(f"Scraping completo. Total registros: {len(df_final)}")
     return df_final
-
 
 if __name__ == "__main__":
     scrape_all()
