@@ -1,211 +1,240 @@
-import requests
-from bs4 import BeautifulSoup
+# src/scraper.py
+
 import pandas as pd
 import time
 import random
 import logging
+import json
 from datetime import datetime
-from config import DISTRICTS, BASE_URL, HEADERS, MIN_DELAY, MAX_DELAY, RAW_DATA_PATH
+from selenium import webdriver
+from selenium.webdriver.edge.service import Service
+from selenium.webdriver.edge.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
+import os
+import sys
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from config import (
+    DISTRICTS, BASE_URL, HEADERS,
+    MIN_DELAY, MAX_DELAY, RAW_DATA_PATH, EDGE_DRIVER_PATH
+)
 
 logging.basicConfig(
-    level = logging.INFO,
-    format = "%(asctime)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
-logger = logging.getlogger(__name__)
+logger = logging.getLogger(__name__)
 
-def get_page(url):
-    try: 
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        response.raise_for_status()
-        return BeautifulSoup(response.text, "html.parser")
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error en la solicitud a {url}: {e}")
+def get_driver():
+    options = Options()
+    # options.add_argument("--headless")  # activar cuando todo funcione
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0"
+    )
+    service = Service(EDGE_DRIVER_PATH)
+    driver = webdriver.Edge(service=service, options=options)
+    driver.execute_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
+    return driver
+
+
+def get_page(driver, url):
+    try:
+        driver.get(url)
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
+        time.sleep(random.uniform(2, 4))
+        return BeautifulSoup(driver.page_source, "html.parser")
+    except Exception as e:
+        logger.error(f"Error al obtener {url}: {e}")
         return None
 
-def is_project(features_text):
-    indicators = ["a","un.", " desde"]
-    return any(indicator in features_text.lower() for indicator in indicators)
 
-def get_listy_urls(district, page=1):
-    url = BASE.URL.format(district=district) + f"?page={page}"
-    logger.info(f"Scraping listado: {url}")
-    soup = get_page(url)
-    if not soup:
-        return []
-    
-    urls = []
-    cards = soup.find_all("div", {"data-qa" : "POSTING_CARD_FEATURES"})
-    for card in cards:
-        features_tag = card.find("h3", {"data-qa" : "POSTING_CARD_FEATURES"})
-        if features_tag and is_project(features_tag.get_text()):
-            continue
-        link = card.find("a",href=True)
-        if link:
-            full_url = "https://urbania.pe" + link["href"]
-            urls.append(full_url)
-        
-    return urls
-
-def parse_features(soup):
-    data = {
-        "area_total": None,
-        "area_built": None,
-        "bedrooms": None,
-        "bathrooms": None,
-        "half_bathrooms": None,
-        "parking_spaces": None,
-        "age_years": None
-    }
-    
-    features_list = soup.find("ul", {"id": "section-icon-features-property"})
-    if not features_list:
-        return data
-
-    for item in features_list.find_all("li"):
-        text = item.get_text(strip=True).lower()
-        value = "".join(filter(str.isdigit, text))
-        if not value:
-            continue
-        value = int(value)
-
-        if "m² tot" in text:
-            data["area_total"] = value
-        elif "m² cub" in text:
-            data["area_built"] = value
-        elif "medios baños" in text:
-            data["half_bathrooms"] = value
-        elif "baños" in text:
-            data["bathrooms"] = value
-        elif "dorm" in text:
-            data["bedrooms"] = value
-        elif "estac" in text:
-            data["parking_spaces"] = value
-        elif "años" in text:
-            data["age_years"] = value
-
-    return data
-
-
-def parse_amenities(soup):
-    amenities = {
-        "has_pool": False,
-        "has_gym": False,
-        "has_security": False,
-        "has_elevator": False,
-        "has_terrace": False,
-        "has_grill": False,
-        "has_laundry": False,
-        "has_sea_view": False,
-        "has_green_areas": False,
-        "has_cowork": False,
-    }
-
-    containers = soup.find_all(
-        "div",
-        class_=lambda c: c and "generalFeaturesProperty-module__description-container" in c
-    )
-
-    all_text = " ".join(
-        span.get_text(strip=True).lower()
-        for container in containers
-        for span in container.find_all("span")
-    )
-
-    amenities["has_pool"]        = "piscina" in all_text
-    amenities["has_gym"]         = "gimnasio" in all_text
-    amenities["has_security"]    = "seguridad" in all_text or "guardianía" in all_text
-    amenities["has_elevator"]    = "ascensor" in all_text
-    amenities["has_terrace"]     = "terraza" in all_text
-    amenities["has_grill"]       = "parrilla" in all_text
-    amenities["has_laundry"]     = "lavandería" in all_text
-    amenities["has_sea_view"]    = "vista al mar" in all_text or "vista a la playa" in all_text
-    amenities["has_green_areas"] = "área verde" in all_text or "areas verdes" in all_text
-    amenities["has_cowork"]      = "cowork" in all_text or "co-work" in all_text
-
-    return amenities
-
-
-def parse_price(soup):
+def parse_price_from_card(card):
     data = {"price_pen": None, "price_usd": None, "maintenance_fee": None}
 
-    price_tag = soup.find("h2", {"data-qa": "POSTING_CARD_PRICE"})
+    price_tag = card.find("h2", {"data-qa": "POSTING_CARD_PRICE"})
     if price_tag:
-        price_text = price_tag.get_text(strip=True)
-        if "S/" in price_text:
-            pen = "".join(filter(str.isdigit, price_text.split("·")[0]))
-            data["price_pen"] = int(pen) if pen else None
-        if "USD" in price_text:
-            usd = "".join(filter(str.isdigit, price_text.split("USD")[-1]))
-            data["price_usd"] = int(usd) if usd else None
+        text = price_tag.get_text(strip=True)
+        parts = text.split("·")
+        for part in parts:
+            part = part.strip()
+            digits = "".join(filter(str.isdigit, part))
+            if not digits:
+                continue
+            if "S/" in part:
+                data["price_pen"] = int(digits)
+            elif "USD" in part:
+                data["price_usd"] = int(digits)
 
-    maintenance_tag = soup.find("h2", {"data-qa": "expensas"})
-    if maintenance_tag:
-        maint = "".join(filter(str.isdigit, maintenance_tag.get_text()))
-        data["maintenance_fee"] = int(maint) if maint else None
+    maint_tag = card.find("h2", {"data-qa": "expensas"})
+    if maint_tag:
+        digits = "".join(c for c in text if c.isascii() and c.isdigit())
+        data["maintenance_fee"] = int(digits) if digits else None
+        digits = "".join(c for c in text if c.isascii() and c.isdigit())
 
     return data
 
 
-def parse_location(soup):
+def parse_features_from_card(card):
+    data = {
+        "area_total": None,
+        "bedrooms": None,
+        "bathrooms": None,
+        "parking_spaces": None,
+    }
+
+    features_tag = card.find("h3", {"data-qa": "POSTING_CARD_FEATURES"})
+    if not features_tag:
+        return data
+
+    spans = features_tag.find_all("span")
+    for span in spans:
+        text = span.get_text(strip=True).lower()
+        digits = "".join(c for c in text if c.isascii() and c.isdigit())
+        if not digits:
+            continue
+        value = int(digits)
+        if "m²" in text or "m2" in text:
+            data["area_total"] = value
+        elif "dorm" in text:
+            data["bedrooms"] = value
+        elif "baño" in text:
+            data["bathrooms"] = value
+        elif "estac" in text:
+            data["parking_spaces"] = value
+
+    return data
+
+
+def parse_location_from_card(card):
     data = {"address": None, "district": None, "urbanization": None}
 
-    address_tag = soup.find("h4", class_=lambda c: c and "location-address" in c)
+    address_tag = card.find(
+        "h4", class_=lambda c: c and "location-address" in c
+    )
     if address_tag:
         data["address"] = address_tag.get_text(strip=True)
 
-    location_tag = soup.find("h4", {"data-qa": "POSTING_CARD_LOCATION"})
+    location_tag = card.find("h4", {"data-qa": "POSTING_CARD_LOCATION"})
     if location_tag:
-        location_text = location_tag.get_text(strip=True)
-        parts = location_text.split(",")
+        text = location_tag.get_text(strip=True)
+        parts = text.split(",")
         if len(parts) >= 2:
             data["urbanization"] = parts[0].strip()
             data["district"] = parts[1].strip()
         else:
-            data["district"] = location_text.strip()
+            data["district"] = text.strip()
 
     return data
 
 
-def scrape_property(url):
-    soup = get_page(url)
-    if not soup:
+def parse_photos_count(card):
+    gallery = card.find("div", {"data-qa": "POSTING_CARD_GALLERY"})
+    if not gallery:
         return None
+    imgs = gallery.find_all("img")
+    return len(imgs)
 
-    record = {"listing_url": url, "scraping_date": datetime.now().strftime("%Y-%m-%d")}
+def parse_json_ld(card):
+    script = card.find("script", {"type": "application/ld+json"})
+    if not script:
+        return {}
+    try:
+        data = json.loads(script.string)
+        return {
+            "json_name": data.get("name", None),
+        }
+    except Exception:
+        return {}
 
-    title_tag = soup.find("h1", class_="title-property")
-    record["title"] = title_tag.get_text(strip=True) if title_tag else None
 
-    record.update(parse_features(soup))
-    record.update(parse_amenities(soup))
-    record.update(parse_price(soup))
-    record.update(parse_location(soup))
+def is_project(card):
+    posting_type = card.get("data-posting-type", "")
+    if posting_type == "DEVELOPMENT":
+        return True
+    features_tag = card.find("h3", {"data-qa": "POSTING_CARD_FEATURES"})
+    if features_tag:
+        text = features_tag.get_text().lower()
+        if " a " in text or "un." in text or "desde" in text:
+            return True
+    return False
+
+
+def parse_card(card, district):
+    record = {
+        "listing_id": card.get("data-id"),
+        "listing_url": "https://urbania.pe" + card.get("data-to-posting", ""),
+        "scraping_date": datetime.now().strftime("%Y-%m-%d"),
+        "district_scraped": district,
+        "source": "urbania",
+    }
+
+    record.update(parse_price_from_card(card))
+    record.update(parse_features_from_card(card))
+    record.update(parse_location_from_card(card))
+    record["photos_count"] = parse_photos_count(card)
+    record.update(parse_json_ld(card))
 
     return record
 
 
 def scrape_district(district, max_pages=10):
     logger.info(f"Iniciando scraping de distrito: {district}")
+    driver = get_driver()
     all_records = []
-    seen_urls = set()
+    seen_ids = set()
 
-    for page in range(1, max_pages + 1):
-        urls = get_listing_urls(district, page)
-        if not urls:
-            logger.info(f"Sin resultados en página {page} de {district}. Fin.")
-            break
+    try:
+        for page in range(1, max_pages + 1):
+            url = BASE_URL.format(district=district) + f"?page={page}"
+            logger.info(f"Scraping listado: {url}")
+            soup = get_page(driver, url)
 
-        for url in urls:
-            if url in seen_urls:
-                continue
-            seen_urls.add(url)
-            record = scrape_property(url)
-            if record:
-                record["district_scraped"] = district
+            if not soup:
+                break
+
+            cards = soup.find_all(
+                "div", attrs={"data-posting-type": True}
+            )
+
+            if not cards:
+                logger.info(f"Sin tarjetas en página {page}. Fin.")
+                break
+
+            new_cards = 0
+            for card in cards:
+                if is_project(card):
+                    continue
+
+                listing_id = card.get("data-id")
+                if listing_id in seen_ids:
+                    continue
+                seen_ids.add(listing_id)
+
+                record = parse_card(card, district)
                 all_records.append(record)
-                logger.info(f"Extraído: {url}")
+                new_cards += 1
+                logger.info(f"Extraído ID: {listing_id}")
+
+            logger.info(f"Página {page}: {new_cards} propiedades nuevas")
             time.sleep(random.uniform(MIN_DELAY, MAX_DELAY))
+
+    finally:
+        driver.quit()
 
     logger.info(f"Distrito {district}: {len(all_records)} propiedades extraídas")
     return all_records
@@ -213,25 +242,29 @@ def scrape_district(district, max_pages=10):
 
 def scrape_all():
     all_data = []
+    os.makedirs(RAW_DATA_PATH, exist_ok=True)
 
     for district in DISTRICTS:
         records = scrape_district(district)
         all_data.extend(records)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        df_district = pd.DataFrame(records)
-        df_district.to_csv(
-            f"{RAW_DATA_PATH}{district}_{timestamp}.csv",
-            index=False,
-            encoding="utf-8-sig"
-        )
+
+        if records:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            df_district = pd.DataFrame(records)
+            csv_path = os.path.join(
+                RAW_DATA_PATH, f"{district}_{timestamp}.csv"
+            )
+            df_district.to_csv(csv_path, index=False, encoding="utf-8-sig")
+            logger.info(f"Guardado: {csv_path}")
+
         time.sleep(random.uniform(5, 10))
 
     df_final = pd.DataFrame(all_data)
-    df_final.to_csv(
-        f"{RAW_DATA_PATH}lima_properties_raw.csv",
-        index=False,
-        encoding="utf-8-sig"
-    )
+    final_path = os.path.join(RAW_DATA_PATH, "lima_properties_raw.csv")
+    df_final.to_csv(final_path, index=False, encoding="utf-8-sig")
     logger.info(f"Scraping completo. Total registros: {len(df_final)}")
     return df_final
 
+
+if __name__ == "__main__":
+    scrape_all()

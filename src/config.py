@@ -25,13 +25,25 @@ BASE_URL = "https://urbania.pe/buscar/venta-de-departamentos-en-{district}--lima
 
 
 HEADERS = {
-    "User-Agent" : (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" #navegador y sistema operativo
-        "AppleWebKit/537.36 (KHTML, like Gecko) " 
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "es-PE,es;q=0.9", #idioma
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" #tipo de contenido que acepta el cliente
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;"
+        "q=0.9,image/avif,image/webp,image/apng,*/*;"
+        "q=0.8,application/signed-exchange;v=b3;q=0.7"
+    ),
+    "Accept-Language": "es-PE,es;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
 }
 
 #Pausas entre los requests
@@ -41,3 +53,5 @@ MAX_DELAY = 5
 
 #cARPETA DE SALIDA DE DATOS
 RAW_DATA_PATH = "data/raw/"
+
+EDGE_DRIVER_PATH = "../drivers/msedgedriver.exe"
