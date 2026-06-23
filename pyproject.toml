@@ -1,0 +1,21 @@
+[project]
+name = "lima-real-estate-price-predictor"
+version = "0.1.0"
+description = "Real estate price predictor for Lima, Peru"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.52",
+    "beautifulsoup4>=4.13",
+    "pandas>=2.2",
+    "lxml>=5.3",
+    "matplotlib>=3.10.9",
+    "seaborn>=0.13.2",
+    "numpy>=2.4.6",
+]
+
+[dependency-groups]
+dev = [
+    "jupyter>=1.1",
+    "matplotlib>=3.10",
+    "seaborn>=0.13",
+]
